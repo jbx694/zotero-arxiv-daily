@@ -213,8 +213,34 @@ class ArxivRetriever(BaseRetriever):
         super().__init__(config)
         if self.config.source.arxiv.category is None:
             raise ValueError("category must be specified for arxiv.")
+        self.lookback_days = config.executor.get("lookback_days")
+        if self.lookback_days:
+            self.conversion_delay = 0
+
+    def _retrieve_recent_papers(self) -> list[ArxivResult]:
+        categories = set(self.retriever_config.category)
+        include_cross_list = self.retriever_config.get("include_cross_list", False)
+        start, end = self.date_window(self.lookback_days)
+        start_minute = start.astimezone(timezone.utc).strftime("%Y%m%d%H%M")
+        end_minute = end.astimezone(timezone.utc).strftime("%Y%m%d%H%M")
+        category_query = " OR ".join(f"cat:{category}" for category in sorted(categories))
+        query = f"({category_query}) AND submittedDate:[{start_minute} TO {end_minute}]"
+        search = arxiv.Search(query=query, sort_by=arxiv.SortCriterion.SubmittedDate)
+        client = arxiv.Client(page_size=100, delay_seconds=3.0)
+        papers = []
+        for paper in client.results(search):
+            if not start <= paper.published < end:
+                continue
+            if not include_cross_list and paper.primary_category not in categories:
+                continue
+            papers.append(paper)
+            if self.config.executor.debug and len(papers) >= 10:
+                break
+        return papers
 
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
+        if self.lookback_days:
+            return self._retrieve_recent_papers()
         query = '+'.join(self.config.source.arxiv.category)
         include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
         rss_url = f"https://rss.arxiv.org/atom/{query}"
@@ -282,11 +308,13 @@ class ArxivRetriever(BaseRetriever):
         authors = [a.name for a in raw_paper.authors]
         abstract = raw_paper.summary
         pdf_url = raw_paper.pdf_url
-        full_text = extract_text_from_tar(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_html(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_pdf(raw_paper)
+        full_text = None
+        if not self.lookback_days:
+            full_text = extract_text_from_tar(raw_paper)
+            if full_text is None:
+                full_text = extract_text_from_html(raw_paper)
+            if full_text is None:
+                full_text = extract_text_from_pdf(raw_paper)
         return Paper(
             source=self.name,
             title=title,

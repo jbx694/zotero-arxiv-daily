@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from datetime import datetime, timedelta, timezone
 from omegaconf import DictConfig
 from ..protocol import Paper, RawPaperItem
 from tqdm import tqdm
@@ -7,11 +8,20 @@ from time import sleep
 from loguru import logger
 
 
+CHINA_TIME = timezone(timedelta(hours=8))
+
+
 class BaseRetriever(ABC):
     name: str
+    conversion_delay = 1
+
     def __init__(self, config:DictConfig):
         self.config = config
         self.retriever_config = getattr(config.source,self.name)
+
+    def date_window(self, lookback_days: int) -> tuple[datetime, datetime]:
+        end = datetime.now(CHINA_TIME).replace(hour=0, minute=0, second=0, microsecond=0)
+        return end - timedelta(days=lookback_days), end
 
     @abstractmethod
     def _retrieve_raw_papers(self) -> list[RawPaperItem]:
@@ -33,7 +43,8 @@ class BaseRetriever(ABC):
                 continue
             if paper is not None:
                 papers.append(paper)
-            sleep(1)
+            if self.conversion_delay:
+                sleep(self.conversion_delay)
         return papers
 
 registered_retrievers = {}

@@ -115,6 +115,8 @@ zotero:
   include_path: null # A list of glob patterns marking the Zotero collections that should be included. Example: ["2026/survey/**", "2026/reading-group/**"]
 
 source:
+  cnki:
+    feed_urls: [] # Official Chinese journal RSS URLs from CNKI.
   arxiv:
     category: null # The categories of target arxiv papers. Find the abbr of your research area from [here](https://arxiv.org/category_taxonomy). Example: ["cs.AI","cs.CV","cs.LG","cs.CL"]
     include_cross_list: false # Whether to include arXiv cross-list papers in subscribed categories. Example: true
@@ -158,21 +160,29 @@ reranker:
 
 executor:
   debug: false # Whether to use debug mode. Example: true
-  send_empty: false # Whether to send an empty email even if no new papers today. Example: true
+  send_empty: false # Whether to send an empty email when no papers are selected. Example: true
   max_paper_num: 100 # The maximum number of the papers presented in the email. Example: 100
+  max_cnki_paper_num: null # Optional separate cap for CNKI.
+  lookback_days: null # Optional number of completed days to search.
+  min_relevance_score: null # Minimum relevance score to include a paper. Example: 4.0
+  prioritize_sources: false # If true, take papers in source order and rank by relevance within each source.
   source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv']
   reranker: local # The reranker to use. Example: 'local' or 'api'
 ```
+
+`executor.min_relevance_score` compares the unrounded score. The email displays it to one decimal place. `max_paper_num` caps the combined list by default. Setting `max_cnki_paper_num` gives CNKI a separate cap and applies `max_paper_num` to the other sources combined. The CNKI group is displayed first in this mode. With `prioritize_sources: true`, papers within a group follow the source order and then relevance.
+
+For the Monday digest, add `cnki` to `executor.source` and list its journal RSS links under `source.cnki.feed_urls`. Set `lookback_days: 7`, `max_cnki_paper_num: 5`, and `max_paper_num: 5` to cap each group at five. The weekly workflow runs at Monday 06:00 China time. The date range uses the previous seven completed dates in China time. arXiv uses API submission dates and abstracts. CNKI uses dates and abstract snippets from its RSS feeds.
 
 That's all! Now you can test the workflow by manually triggering it:
 ![test](./assets/test.png)
 
 > [!NOTE]
-> The Test-Workflow Action is the debug version of the main workflow (Send-emails-daily), which always retrieve 5 arxiv papers regardless of the date. While the main workflow will be automatically triggered everyday and retrieve new papers released yesterday. There is no new arxiv paper at weekends and holiday, in which case you may see "No new papers found" in the log of main workflow.
+> The Test workflow uses smaller samples and sends a test email when papers qualify. For CNKI it previews up to ten recent entries per feed. The scheduled workflow uses the configured date range.
 
 Then check the log and the receiver email after it finishes.
 
-By default, the main workflow runs on 22:00 UTC everyday. You can change this time by editting the workflow config `.github/workflows/main.yml`.
+The main workflow runs on Mondays at 06:00 in China (Sunday 22:00 UTC). Edit `.github/workflows/main.yml` to change the time. If you set checkout overrides, make sure they point to the repository and branch containing this code.
 
 ### Local Running
 Supported by [uv](https://github.com/astral-sh/uv), this workflow can easily run on your local device if uv is installed:

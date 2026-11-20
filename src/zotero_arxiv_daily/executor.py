@@ -110,14 +110,33 @@ class Executor:
         if len(all_papers) > 0:
             logger.info("Reranking papers...")
             reranked_papers = self.reranker.rerank(all_papers, corpus)
-            reranked_papers = reranked_papers[:self.config.executor.max_paper_num]
+            min_score = self.config.executor.get("min_relevance_score")
+            if min_score is not None:
+                reranked_papers = [
+                    paper for paper in reranked_papers
+                    if paper.score is not None and paper.score >= min_score
+                ]
+                logger.info(f"{len(reranked_papers)} papers met the relevance threshold of {min_score}")
+            if self.config.executor.get("prioritize_sources", False):
+                source_priority = {source: rank for rank, source in enumerate(self.retrievers)}
+                other_source_rank = len(source_priority)
+                reranked_papers.sort(key=lambda paper: source_priority.get(paper.source, other_source_rank))
+            paper_limit = self.config.executor.max_paper_num
+            cnki_limit = self.config.executor.get("max_cnki_paper_num")
+            if cnki_limit is None:
+                reranked_papers = reranked_papers[:paper_limit]
+            else:
+                cnki_papers = [paper for paper in reranked_papers if paper.source == "cnki"]
+                other_papers = [paper for paper in reranked_papers if paper.source != "cnki"]
+                reranked_papers = cnki_papers[:cnki_limit] + other_papers[:paper_limit]
+        if not reranked_papers and not self.config.executor.send_empty:
+            logger.info("No papers selected. No email will be sent.")
+            return
+        if reranked_papers:
             logger.info("Generating TLDR and affiliations...")
             for p in tqdm(reranked_papers):
                 p.generate_tldr(self.openai_client, self.config.llm)
                 p.generate_affiliations(self.openai_client, self.config.llm)
-        elif not self.config.executor.send_empty:
-            logger.info("No new papers found. No email will be sent.")
-            return
         logger.info("Sending email...")
         email_content = render_email(reranked_papers)
         send_email(self.config, email_content)

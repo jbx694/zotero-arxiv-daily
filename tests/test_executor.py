@@ -1,6 +1,7 @@
 """Tests for zotero_arxiv_daily.executor: normalize_path_patterns, filter_corpus, fetch_zotero_corpus, E2E."""
 
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 from omegaconf import OmegaConf
@@ -281,3 +282,69 @@ def test_run_no_papers_send_empty_true(config, monkeypatch):
     assert len(sent) == 1, "Email should be sent even with no papers when send_empty=true"
     _, _, body = sent[0]
     assert "text/html" in body
+
+
+@pytest.mark.parametrize(
+    ("min_score", "prioritize_sources", "limit", "cnki_limit", "send_empty", "expected"),
+    [
+        (None, False, 6, None, False, ["chemrxiv", "biorxiv", "arxiv-1", "medrxiv", "arxiv-2", "arxiv-3"]),
+        (4.0, False, 6, None, False, ["chemrxiv", "biorxiv", "arxiv-1", "medrxiv", "arxiv-2"]),
+        (4.0, True, 4, None, False, ["arxiv-1", "arxiv-2", "biorxiv", "medrxiv"]),
+        (10.0, True, 6, None, False, None),
+        (10.0, True, 6, None, True, []),
+        (4.0, False, 5, 5, False, ["cnki-high", "cnki-boundary", "chemrxiv", "biorxiv", "arxiv-1", "medrxiv", "arxiv-2"]),
+        (4.0, False, 2, 1, False, ["cnki-high", "chemrxiv", "biorxiv"]),
+    ],
+)
+def test_run_selects_papers_before_summary_and_email(
+    config, monkeypatch, min_score, prioritize_sources, limit, cnki_limit, send_empty, expected,
+):
+    from tests.canned_responses import make_sample_corpus, make_sample_paper
+    from zotero_arxiv_daily.protocol import Paper
+
+    config.executor.min_relevance_score = min_score
+    config.executor.prioritize_sources = prioritize_sources
+    config.executor.max_paper_num = limit
+    config.executor.max_cnki_paper_num = cnki_limit
+    config.executor.send_empty = send_empty
+    by_source = {
+        "arxiv": [
+            make_sample_paper(source="arxiv", title="arxiv-1", score=7.0),
+            make_sample_paper(source="arxiv", title="arxiv-2", score=4.0),
+            make_sample_paper(source="arxiv", title="arxiv-3", score=3.9),
+            make_sample_paper(source="arxiv", title="arxiv-4", score=2.0),
+        ],
+        "biorxiv": [make_sample_paper(source="biorxiv", title="biorxiv", score=8.0)],
+        "medrxiv": [make_sample_paper(source="medrxiv", title="medrxiv", score=6.0)],
+        "chemrxiv": [make_sample_paper(source="chemrxiv", title="chemrxiv", score=9.0)],
+    }
+    if cnki_limit is not None:
+        by_source["cnki"] = [
+            make_sample_paper(source="cnki", title="cnki-low", score=3.0),
+            make_sample_paper(source="cnki", title="cnki-boundary", score=4.0),
+            make_sample_paper(source="cnki", title="cnki-high", score=8.5),
+        ]
+    executor = Executor.__new__(Executor)
+    executor.config = config
+    executor.fetch_zotero_corpus = make_sample_corpus
+    executor.filter_corpus = lambda corpus: corpus
+    executor.openai_client = None
+    executor.retrievers = {
+        source: SimpleNamespace(retrieve_papers=lambda papers=papers: papers)
+        for source, papers in by_source.items()
+    }
+    executor.reranker = SimpleNamespace(
+        rerank=lambda papers, corpus: sorted(papers, key=lambda paper: paper.score, reverse=True),
+    )
+
+    summarized = []
+    sent = []
+    monkeypatch.setattr(Paper, "generate_tldr", lambda paper, *_: summarized.append(paper.title))
+    monkeypatch.setattr(Paper, "generate_affiliations", lambda *_: None)
+    monkeypatch.setattr("zotero_arxiv_daily.executor.render_email", lambda papers: [p.title for p in papers])
+    monkeypatch.setattr("zotero_arxiv_daily.executor.send_email", lambda _, titles: sent.append(titles))
+
+    executor.run()
+
+    assert summarized == (expected or [])
+    assert sent == ([] if expected is None else [expected])

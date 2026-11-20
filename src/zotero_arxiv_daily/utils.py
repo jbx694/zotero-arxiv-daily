@@ -152,8 +152,14 @@ def send_email(config:DictConfig, html:str):
     msg = MIMEText(html, 'html', 'utf-8')
     msg['From'] = _format_addr('Github Action <%s>' % sender)
     msg['To'] = _format_addr('You <%s>' % receiver)
-    today = datetime.datetime.now().strftime('%Y/%m/%d')
-    msg['Subject'] = Header(f'Daily arXiv {today}', 'utf-8').encode()
+    if config.get("executor", {}).get("lookback_days") == 7:
+        china_time = datetime.timezone(datetime.timedelta(hours=8))
+        today = datetime.datetime.now(china_time).strftime('%Y/%m/%d')
+        subject = f'Weekly literature digest {today}'
+    else:
+        today = datetime.datetime.now().strftime('%Y/%m/%d')
+        subject = f'Daily arXiv {today}'
+    msg['Subject'] = Header(subject, 'utf-8').encode()
 
     try:
         server = smtplib.SMTP(smtp_server, smtp_port)

@@ -76,7 +76,13 @@ class ChemrxivRetriever(BaseRetriever):
         return match is not None and int(match.group(1)) > 1
 
     def _retrieve_raw_papers(self) -> list[dict[str, Any]]:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=self.lookback_hours)
+        lookback_days = self.config.executor.get("lookback_days")
+        if lookback_days:
+            cutoff, end = self.date_window(lookback_days)
+            cutoff = cutoff.astimezone(timezone.utc)
+        else:
+            end = datetime.now(timezone.utc)
+            cutoff = end - timedelta(hours=self.lookback_hours)
         include_new_versions = bool(getattr(self.retriever_config, "include_new_versions", False))
 
         collection = []
@@ -102,6 +108,8 @@ class ChemrxivRetriever(BaseRetriever):
                 if created < cutoff:
                     reached_cutoff = True
                     break
+                if lookback_days and created >= end:
+                    continue
                 if not include_new_versions and self._is_new_version(item.get("DOI", "")):
                     continue
                 collection.append(item)
@@ -109,7 +117,7 @@ class ChemrxivRetriever(BaseRetriever):
                 break
 
         if len(collection) == 0:
-            logger.warning(f"No chemRxiv paper found in the last {self.lookback_hours} hours.")
+            logger.warning(f"No chemRxiv paper found in the period beginning {cutoff.isoformat()}.")
         if self.config.executor.debug:
             collection = collection[:10]
         return collection
